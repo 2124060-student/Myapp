@@ -16,6 +16,11 @@
                 linear-gradient(90deg, rgba(200, 200, 200, 0.1) 1px, transparent 1px);
             background-size: 20px 20px;
         }
+        .gemini-btn:disabled {
+            cursor: not-allowed;
+            background-color: #4f46e5 !important;
+            opacity: 0.7;
+        }
     </style>
 </head>
 <body class="bg-slate-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
@@ -31,21 +36,23 @@
                 <span>CLEAR!</span>
                 <button id="resetButtonWin" class="mt-4 px-6 py-2 bg-cyan-500 hover:bg-cyan-600 rounded-lg text-2xl text-white transition-transform duration-200 hover:scale-105">もう一度</button>
             </div>
+             <div id="apiError" class="absolute bottom-2 right-2 bg-red-500 text-white text-sm px-3 py-1 rounded hidden">APIエラーが発生しました。</div>
         </div>
 
         <!-- Controls and Info Panel -->
-        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-             <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+        <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+             <div class="bg-slate-800 p-4 rounded-lg border border-slate-700 md:col-span-1">
                 <h2 class="text-lg font-bold text-cyan-400 mb-2">物理パラメータ</h2>
                 <div class="grid grid-cols-2 gap-2 text-sm">
-                    <p>重力 (Y加速度): <span id="gravityInfo" class="font-mono text-yellow-400"></span></p>
-                    <p>摩擦係数: <span id="frictionInfo" class="font-mono text-yellow-400"></span></p>
-                    <p>速度 (X): <span id="velocityXInfo" class="font-mono text-lime-400"></span></p>
-                    <p>速度 (Y): <span id="velocityYInfo" class="font-mono text-lime-400"></span></p>
+                    <p>重力: <span id="gravityInfo" class="font-mono text-yellow-400"></span></p>
+                    <p>摩擦: <span id="frictionInfo" class="font-mono text-yellow-400"></span></p>
+                    <p>速度X: <span id="velocityXInfo" class="font-mono text-lime-400"></span></p>
+                    <p>速度Y: <span id="velocityYInfo" class="font-mono text-lime-400"></span></p>
                 </div>
             </div>
-            <div class="bg-slate-800 p-4 rounded-lg flex items-center justify-center border border-slate-700">
-                 <button id="resetButton" class="w-full md:w-auto px-8 py-3 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-lg font-semibold transition-transform duration-200 hover:scale-105 shadow-lg">リセット</button>
+            <div class="bg-slate-800 p-4 rounded-lg flex flex-col sm:flex-row items-center justify-center gap-4 border border-slate-700 md:col-span-2">
+                 <button id="resetButton" class="w-full sm:w-auto flex-1 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-lg font-semibold transition-transform duration-200 hover:scale-105 shadow-lg">リセット</button>
+                 <button id="generateMazeButton" class="gemini-btn w-full sm:w-auto flex-1 px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-lg text-lg font-semibold transition-transform duration-200 hover:scale-105 shadow-lg">✨ 新しい迷路を生成</button>
             </div>
         </div>
     </div>
@@ -57,6 +64,8 @@
         const winMessage = document.getElementById('winMessage');
         const resetButton = document.getElementById('resetButton');
         const resetButtonWin = document.getElementById('resetButtonWin');
+        const generateMazeButton = document.getElementById('generateMazeButton');
+        const apiError = document.getElementById('apiError');
 
         // --- DOM Info Elements ---
         const gravityInfo = document.getElementById('gravityInfo');
@@ -78,8 +87,20 @@
 
         let ball, startPoint, goal, maze, isAiming, startDrag, endDrag;
 
+        const defaultMaze = [
+            // Outer walls are generated dynamically now
+            // Inner maze walls
+            { x: 0, y: 150, width: 300, height: 10 },
+            { x: 150, y: 450, width: 400, height: 10 },
+            { x: 500, y: 100, width: 10, height: 250 },
+            { x: 350, y: 250, width: 10, height: 200 },
+            { x: 100, y: 150, width: 10, height: 200 },
+            { x: 600, y: 450, width: 10, height: 100 },
+            { x: 250, y: 0, width: 10, height: 100 },
+        ];
+        
         // --- Game Objects ---
-        function initializeGameObjects() {
+        function initializeGameObjects(newMazeWalls = defaultMaze) {
             ball = {
                 x: 60,
                 y: 300,
@@ -103,26 +124,106 @@
                 color: '#facc15' // yellow-400
             };
 
+            // Combine outer walls with the provided inner walls
             maze = [
-                // Outer walls
                 { x: 0, y: 0, width: baseWidth, height: 10 },
                 { x: 0, y: baseHeight - 10, width: baseWidth, height: 10 },
                 { x: 0, y: 0, width: 10, height: baseHeight },
                 { x: baseWidth - 10, y: 0, width: 10, height: baseHeight },
-                // Inner maze walls
-                { x: 0, y: 150, width: 300, height: 10 },
-                { x: 150, y: 450, width: 400, height: 10 },
-                { x: 500, y: 100, width: 10, height: 250 },
-                { x: 350, y: 250, width: 10, height: 200 },
-                { x: 100, y: 150, width: 10, height: 200 },
-                { x: 600, y: 450, width: 10, height: 100 },
-                { x: 250, y: 0, width: 10, height: 100 },
+                ...newMazeWalls
             ];
 
             isAiming = false;
             startDrag = null;
             endDrag = null;
         }
+        
+        // --- Gemini API Integration ---
+        async function callGeminiForMaze() {
+            const apiKey = ""; // Canvas will provide this
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+            const systemPrompt = `You are an expert level designer for a 2D physics puzzle game. Your task is to generate a challenging but solvable maze layout.
+The canvas is 800 units wide and 600 units high.
+The ball starts at a fixed position of {x: 60, y: 300}.
+The goal is a fixed 60x60 area at {x: 720, y: 520}.
+You must generate an array of 5 to 10 rectangular wall objects for the inner part of the maze.
+RULES:
+1.  All walls must be within the canvas boundaries (0 to 800 for x, 0 to 600 for y).
+2.  Walls must have a minimum width or height of 10.
+3.  Do NOT place walls that overlap the starting area (a circle of radius 30 around the start point) or the goal area.
+4.  The maze MUST be solvable. There must be a clear, albeit potentially difficult, path from the start to the goal. Do not create impossible traps.
+5.  Return ONLY a valid JSON array of wall objects. Each object must have four integer properties: "x", "y", "width", "height". Do not include any other text, explanations, or markdown formatting.`;
+
+            const payload = {
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+                contents: [{
+                    parts: [{ text: "Generate a new maze layout based on the system instructions." }]
+                }],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "ARRAY",
+                        items: {
+                            type: "OBJECT",
+                            properties: {
+                                x: { type: "INTEGER" },
+                                y: { type: "INTEGER" },
+                                width: { type: "INTEGER" },
+                                height: { type: "INTEGER" },
+                            },
+                            required: ["x", "y", "width", "height"]
+                        }
+                    }
+                }
+            };
+            
+            let response;
+            try {
+                // Exponential backoff for retries
+                let attempts = 0;
+                while(attempts < 5) {
+                    response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (response.ok) break;
+                    attempts++;
+                    await new Promise(resolve => setTimeout(resolve, 2**attempts * 100));
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`API request failed with status ${response.status}`);
+                }
+
+                const result = await response.json();
+                const jsonText = result.candidates[0].content.parts[0].text;
+                return JSON.parse(jsonText);
+            } catch (error) {
+                console.error("Error calling Gemini API:", error);
+                apiError.style.display = 'block';
+                setTimeout(() => { apiError.style.display = 'hidden' }, 3000);
+                return null;
+            }
+        }
+        
+        async function handleGenerateMazeClick() {
+            generateMazeButton.disabled = true;
+            generateMazeButton.textContent = "生成中...";
+            
+            const newMaze = await callGeminiForMaze();
+            
+            if(newMaze) {
+                resetGame(newMaze);
+            }
+
+            generateMazeButton.disabled = false;
+            generateMazeButton.textContent = "✨ 新しい迷路を生成";
+        }
+
 
         // --- Drawing Functions ---
         function drawBall() {
@@ -265,8 +366,8 @@
             velocityYInfo.textContent = ball.vy.toFixed(2);
         }
 
-        function resetGame() {
-            initializeGameObjects();
+        function resetGame(mazeData) {
+            initializeGameObjects(mazeData);
             winMessage.style.display = 'none';
         }
 
@@ -314,16 +415,17 @@
             ball.vy = dy * physics.launchPower;
         }
 
-        canvas.addEventListener('mousedown', y
+        canvas.addEventListener('mousedown', onPointerDown);
         canvas.addEventListener('mousemove', onPointerMove);
         window.addEventListener('mouseup', onPointerUp);
 
         canvas.addEventListener('touchstart', onPointerDown);
         canvas.addEventListener('touchmove', onPointerMove);
         window.addEventListener('touchend', onPointerUp);
-
-        resetButton.addEventListener('click', resetGame);
-        resetButtonWin.addEventListener('click', resetGame);
+        
+        resetButton.addEventListener('click', () => resetGame());
+        resetButtonWin.addEventListener('click', () => resetGame());
+        generateMazeButton.addEventListener('click', handleGenerateMazeClick);
         
         // --- Initial Start ---
         resetGame();
@@ -332,3 +434,4 @@
     </script>
 </body>
 </html>
+
