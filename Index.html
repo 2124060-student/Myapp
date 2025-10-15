@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物理演算迷路ゲーム</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', 'Helvetica Neue', 'Arial', 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'BIZ UDPGothic', sans-serif;
+            touch-action: none; /* Disable pull-to-refresh on mobile */
+        }
+        canvas {
+            background-image:
+                linear-gradient(rgba(200, 200, 200, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(200, 200, 200, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-2xl mx-auto">
+        <h1 class="text-3xl md:text-4xl font-bold text-center mb-2 text-cyan-400">物理演算迷路ゲーム</h1>
+        <p class="text-center text-slate-400 mb-4">パチンコを引っぱってボールをゴールに導こう！</p>
+
+        <!-- Game Canvas -->
+        <div class="relative aspect-[4/3] w-full bg-slate-800 rounded-xl shadow-2xl overflow-hidden border-2 border-slate-700">
+            <canvas id="gameCanvas" class="w-full h-full"></canvas>
+            <div id="winMessage" class="absolute inset-0 bg-black bg-opacity-70 flex-col items-center justify-center text-5xl font-bold text-yellow-400 hidden">
+                <span>CLEAR!</span>
+                <button id="resetButtonWin" class="mt-4 px-6 py-2 bg-cyan-500 hover:bg-cyan-600 rounded-lg text-2xl text-white transition-transform duration-200 hover:scale-105">もう一度</button>
+            </div>
+        </div>
+
+        <!-- Controls and Info Panel -->
+        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+             <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                <h2 class="text-lg font-bold text-cyan-400 mb-2">物理パラメータ</h2>
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <p>重力 (Y加速度): <span id="gravityInfo" class="font-mono text-yellow-400"></span></p>
+                    <p>摩擦係数: <span id="frictionInfo" class="font-mono text-yellow-400"></span></p>
+                    <p>速度 (X): <span id="velocityXInfo" class="font-mono text-lime-400"></span></p>
+                    <p>速度 (Y): <span id="velocityYInfo" class="font-mono text-lime-400"></span></p>
+                </div>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-lg flex items-center justify-center border border-slate-700">
+                 <button id="resetButton" class="w-full md:w-auto px-8 py-3 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-lg font-semibold transition-transform duration-200 hover:scale-105 shadow-lg">リセット</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Canvas & Context Setup ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const winMessage = document.getElementById('winMessage');
+        const resetButton = document.getElementById('resetButton');
+        const resetButtonWin = document.getElementById('resetButtonWin');
+
+        // --- DOM Info Elements ---
+        const gravityInfo = document.getElementById('gravityInfo');
+        const frictionInfo = document.getElementById('frictionInfo');
+        const velocityXInfo = document.getElementById('velocityXInfo');
+        const velocityYInfo = document.getElementById('velocityYInfo');
+        
+        let baseWidth = 800;
+        let baseHeight = 600;
+        canvas.width = baseWidth;
+        canvas.height = baseHeight;
+
+        // --- Game State & Physics Constants ---
+        const physics = {
+            gravity: 0.15,
+            friction: 0.99,
+            launchPower: 0.15
+        };
+
+        let ball, startPoint, goal, maze, isAiming, startDrag, endDrag;
+
+        // --- Game Objects ---
+        function initializeGameObjects() {
+            ball = {
+                x: 60,
+                y: 300,
+                radius: 15,
+                vx: 0,
+                vy: 0,
+                color: '#22d3ee' // cyan-400
+            };
+
+            startPoint = {
+                x: 60,
+                y: 300,
+                radius: 20
+            };
+            
+            goal = {
+                x: 720,
+                y: 520,
+                width: 60,
+                height: 60,
+                color: '#facc15' // yellow-400
+            };
+
+            maze = [
+                // Outer walls
+                { x: 0, y: 0, width: baseWidth, height: 10 },
+                { x: 0, y: baseHeight - 10, width: baseWidth, height: 10 },
+                { x: 0, y: 0, width: 10, height: baseHeight },
+                { x: baseWidth - 10, y: 0, width: 10, height: baseHeight },
+                // Inner maze walls
+                { x: 0, y: 150, width: 300, height: 10 },
+                { x: 150, y: 450, width: 400, height: 10 },
+                { x: 500, y: 100, width: 10, height: 250 },
+                { x: 350, y: 250, width: 10, height: 200 },
+                { x: 100, y: 150, width: 10, height: 200 },
+                { x: 600, y: 450, width: 10, height: 100 },
+                { x: 250, y: 0, width: 10, height: 100 },
+            ];
+
+            isAiming = false;
+            startDrag = null;
+            endDrag = null;
+        }
+
+        // --- Drawing Functions ---
+        function drawBall() {
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = ball.color;
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawMaze() {
+            ctx.fillStyle = '#64748b'; // slate-500
+            maze.forEach(wall => {
+                ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
+            });
+        }
+
+        function drawGoal() {
+            ctx.fillStyle = goal.color;
+            ctx.fillRect(goal.x, goal.y, goal.width, goal.height);
+        }
+
+        function drawSlingshot() {
+            if (!isAiming || !startDrag || !endDrag) return;
+            
+            // Draw rubber band
+            ctx.beginPath();
+            ctx.moveTo(startPoint.x, startPoint.y);
+            ctx.lineTo(ball.x, ball.y);
+            ctx.strokeStyle = '#f8fafc'; // slate-50
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.closePath();
+
+            // Draw trajectory preview
+            const dx = (startDrag.x - endDrag.x) * physics.launchPower;
+            const dy = (startDrag.y - endDrag.y) * physics.launchPower;
+            let previewX = ball.x;
+            let previewY = ball.y;
+            let previewVx = dx;
+            let previewVy = dy;
+
+            ctx.setLineDash([2, 5]);
+            ctx.beginPath();
+            ctx.moveTo(previewX, previewY);
+            for (let i = 0; i < 50; i++) {
+                previewVy += physics.gravity;
+                previewVx *= physics.friction;
+                previewVy *= physics.friction;
+                previewX += previewVx;
+                previewY += previewVy;
+                ctx.lineTo(previewX, previewY);
+            }
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+        
+        // --- Physics & Collision ---
+        function updateBallPosition() {
+            if (isAiming) return;
+
+            // Apply gravity
+            ball.vy += physics.gravity;
+
+            // Apply friction
+            ball.vx *= physics.friction;
+            ball.vy *= physics.friction;
+
+            // Update position
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+
+            handleCollisions();
+        }
+        
+        function handleCollisions() {
+            // Maze wall collisions
+            maze.forEach(wall => {
+                const closestX = Math.max(wall.x, Math.min(ball.x, wall.x + wall.width));
+                const closestY = Math.max(wall.y, Math.min(ball.y, wall.y + wall.height));
+
+                const dx = ball.x - closestX;
+                const dy = ball.y - closestY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < ball.radius) {
+                    const overlap = ball.radius - distance;
+                    const normalX = dx / distance;
+                    const normalY = dy / distance;
+
+                    // Move ball out of wall
+                    ball.x += normalX * overlap;
+                    ball.y += normalY * overlap;
+
+                    // Reflect velocity
+                    const dotProduct = (ball.vx * normalX + ball.vy * normalY) * 2;
+                    ball.vx -= dotProduct * normalX;
+                    ball.vy -= dotProduct * normalY;
+                }
+            });
+        }
+        
+        function checkWinCondition() {
+            if (ball.x > goal.x && ball.x < goal.x + goal.width &&
+                ball.y > goal.y && ball.y < goal.y + goal.height) {
+                winMessage.style.display = 'flex';
+                // Stop the ball
+                ball.vx = 0;
+                ball.vy = 0;
+            }
+        }
+
+        // --- Game Loop ---
+        function gameLoop() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#1e293b'; // slate-800
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw game elements
+            drawMaze();
+            drawGoal();
+            drawSlingshot();
+            drawBall();
+
+            // Update physics
+            updateBallPosition();
+            checkWinCondition();
+            updateInfoPanel();
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- UI Updates ---
+        function updateInfoPanel() {
+            gravityInfo.textContent = physics.gravity.toFixed(2);
+            frictionInfo.textContent = physics.friction.toFixed(2);
+            velocityXInfo.textContent = ball.vx.toFixed(2);
+            velocityYInfo.textContent = ball.vy.toFixed(2);
+        }
+
+        function resetGame() {
+            initializeGameObjects();
+            winMessage.style.display = 'none';
+        }
+
+        // --- Event Listeners ---
+        function getMousePos(event) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const clientX = event.clientX || (event.touches && event.touches[0].clientX);
+            const clientY = event.clientY || (event.touches && event.touches[0].clientY);
+            return {
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY,
+            };
+        }
+
+        function onPointerDown(e) {
+            const pos = getMousePos(e);
+            const distToBall = Math.sqrt((pos.x - ball.x)**2 + (pos.y - ball.y)**2);
+            if (distToBall < startPoint.radius) {
+                isAiming = true;
+                startDrag = pos;
+            }
+        }
+
+        function onPointerMove(e) {
+            if (!isAiming) return;
+            endDrag = getMousePos(e);
+            
+            // Move the ball with the drag for aiming visualization
+            const dx = endDrag.x - startDrag.x;
+            const dy = endDrag.y - startDrag.y;
+            ball.x = startPoint.x + dx;
+            ball.y = startPoint.y + dy;
+        }
+
+        function onPointerUp(e) {
+            if (!isAiming) return;
+            isAiming = false;
+            
+            // Launch the ball
+            const dx = startDrag.x - endDrag.x;
+            const dy = startDrag.y - endDrag.y;
+            ball.vx = dx * physics.launchPower;
+            ball.vy = dy * physics.launchPower;
+        }
+
+        canvas.addEventListener('mousedown', y
+        canvas.addEventListener('mousemove', onPointerMove);
+        window.addEventListener('mouseup', onPointerUp);
+
+        canvas.addEventListener('touchstart', onPointerDown);
+        canvas.addEventListener('touchmove', onPointerMove);
+        window.addEventListener('touchend', onPointerUp);
+
+        resetButton.addEventListener('click', resetGame);
+        resetButtonWin.addEventListener('click', resetGame);
+        
+        // --- Initial Start ---
+        resetGame();
+        gameLoop();
+
+    </script>
+</body>
+</html>
